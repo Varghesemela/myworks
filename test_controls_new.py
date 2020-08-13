@@ -97,13 +97,11 @@ class Controls(object):
 			#Subscribers
 			# self.OffsetValue = rospy.Subscriber("Vision/Lane_Offset", Int64, self.cal_angle)
 			rospy.Subscriber("Input/Inputs", Float64MultiArray, self.get_data , queue_size=1)
-			# rospy.Subscriber("Output/Feedback", Float32MultiArray, self.get_FBdata , queue_size=1)
 			# rospy.Subscriber("/fused_data", fused_data_, self.update_dist)
 			rospy.Subscriber("/manual_speed", Float64, self.call_manualSPeed)
 			# rospy.Subscriber("/object_dis", Float64, self.get_obj_dis)
 			# rospy.Subscriber("/speedCommand", Float64, self.get_MPCspeed, queue_size=1)
 			# rospy.Subscriber("/steerCommand", Float64, self.get_MPCsteer, queue_size=1)
-			# rospy.Subscriber("/planning/gideon/velocityToFollow", Float64, self.get_vel, queue_size=1)
 			# rospy.Subscriber("/planning/gideon/emergencyFlag", Bool, self.get_emergency, queue_size=1)
 			#rospy.Subscriber("/Controls/debug", , self.get_emergency, queue_size=1)
 
@@ -118,19 +116,6 @@ class Controls(object):
 	def call_manualSPeed(self, data):
 		self.ReferenceSpeed = data.data
 		print("manual_speed",self.ReferenceSpeed)
-
-	def get_vel(self, msg):
-
-		# self.ObstaclePresent = msg.data[0]
-		# # self.RadianAngle = msg.data[1]
-		# self.StopBoardPresent = msg.data[1]
-		if (self.ObjectPresent == False):
-			self.ReferenceSpeed = (msg.data * 3.6) #Data is converted from m/s to km/h
-			#print("Velocity Status:",self.ReferenceSpeed, self.CurrentVelocity)
-		# self.StopBoardPresentdDistance = msg.data[3]
-
-	def get_FBdata(self,msg):
-		self.FBSteeringAngle = msg.data[5]
 
 	def get_MPCspeed(self, msg):
 		if (self.ObjectPresent == False):
@@ -168,62 +153,24 @@ class Controls(object):
 
 	def cruizer(self):
 
-		'''	
-		
-							if (obstacle_dis/StopSign)
-									|
-					-----------------------------------------------------------------
-					|                                                               |
-				YES |                                                            NO |
-					|                                                               |
-					|                                                               |
-					V                                                               |  
-		-------------------------------------------                                 |
-		|                       |                  |                                |
-		| obstacle_dis          | obstacle_dis     |                                |
-		|  < 4                  |    4 - 20        |                                |
-		V                       V                  V                                | 
-	Emergency braking     Soft braking         Do Nothing                           | 
-							  PID                                                   |
-																					V
-														------------------------------------------------
-														|                           |                   |
-														|                           |                   |
-														|                           |                   |
-												current speed <               current speed ==        current speed > refernce speed +2     
-												reference speed - 2             reference speed +- 2    |
-														|                           |                   |
-														|                           |                   |
-														V                           V                   V
-													accelerate & Release brake    do nothing     brake & deaccelrate
-															PID
-		'''
 		print(self.ObjectPresent,self.CurrentVelocity,self.ReferenceSpeed,self.NormalAccel,self.BrakeAngle,self.ClutchAngle)
 		if(self.ObjectPresent):
 			print("Going to Emergency ")
-			# self.NormalAccel = 1
-			# self.Accel.data = [1, 1]
-			# self.AccelPub.publish(self.Accel)
-			# print("Object Detected")
 			self.EmergencyBraking()
 			
 		else:
 			if(self.ReferenceSpeed >= 100):
 				
-				self.AccelPID.auto_mode = False
-
 				self.BrakeAngle = 1
 				self.BrakeMotorSpeed = 1
 				self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
 				self.BrakePub.publish(self.Brake)
 				time.sleep(0.05)
-				
 				self.NormalAccel = 1
 				self.AccelMotorSpeed = 1
 				self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
 				self.AccelPub.publish(self.Accel)
 				time.sleep(0.05)
-
 				self.ClutchAngle = 1
 				self.ClutchMotorSpeed = 1
 				self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
@@ -252,17 +199,11 @@ class Controls(object):
 				self.AccelPID.setpoint = self.ReferenceSpeed
 				self.BrakePID.setpoint = self.ReferenceSpeed
 			
-
-				#Condition 1 : When Current velocity is smaller than Reference Speed
-				# if (self.CurrentVelocity < self.ReferenceSpeed):
 				if(1):
-					if(self.CurrentVelocity<8):
+					if(self.CurrentVelocity < 6):
 						self.AccelPID.output_limits = (0, 30)
 						self.BrakePID.output_limits = (0, self.BrakeMax)		
-						if(self.CurrentVelocity<5):
-							self.ClutchAngle = self.halfClutch
-						else:
-							self.ClutchAngle = 195
+						self.ClutchAngle = self.halfClutch
 						self.ClutchMotorSpeed = 1
 						self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
 						self.ClutchPub.publish(self.Clutch)
@@ -273,46 +214,66 @@ class Controls(object):
 						self.ClutchMotorSpeed = 1
 						self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
 						self.ClutchPub.publish(self.Clutch)
-
-					print("Accelerating")
+					print("Accelerating", self.NormalAccel)
 					
 					self.AccelPID.auto_mode = True
-					self.BrakePID.auto_mode = True
-
-					self.NormalAccel = 14 + self.AccelPID(self.CurrentVelocity)					
+					self.NormalAccel = 15 + self.AccelPID(self.CurrentVelocity)					
 					if(self.NormalAccel > self.AccelMax):
 						self.NormalAccel = self.AccelMax
 					self.AccelMotorSpeed = 1					
-					# print("Normal Acceleration : ", self.NormalAccel)
 					self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
 					self.AccelPub.publish(self.Accel)
 					time.sleep(0.05)
-
-					self.BrakeAngle = 10 + self.BrakePID(self.CurrentVelocity)					
+					
+					self.BrakePID.auto_mode = True
+					self.BrakeAngle = 50 + self.BrakePID(self.CurrentVelocity)					
 					if(self.BrakeAngle > self.BrakeMax):
 						self.BrakeAngle = self.BrakeMax
 					self.BrakeMotorSpeed = 1					
-					# print("Normal Acceleration : ", self.NormalAccel)
 					self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
 					self.BrakePub.publish(self.Brake)
-					time.sleep(0.05)					
-			
-			# else:
-			# 	self.Brake.data = [1, 1]
-			# 	self.BrakePub.publish(self.Brake)
-			# 	time.sleep(0.05)
-				
+					time.sleep(0.05)									
 
 def main(args):
 	try:
 		control = Controls()
+		self.BrakeMotorSpeed = 1					
+		self.Brake.data = [self.BrakeMax, self.BrakeMotorSpeed]
+		self.BrakePub.publish(self.Brake)
+		time.sleep(1)
+
+		self.ClutchMotorSpeed = 1					
+		self.Clutch.data = [self.ClutchMax, self.ClutchMotorSpeed]
+		self.BrakePub.publish(self.Clutch)
+		time.sleep(1)
+
+
+		self.BrakeAngle = 1
+		self.BrakeMotorSpeed = 1					
+		self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
+		self.BrakePub.publish(self.Brake)
+		time.sleep(1)
+
 		while (not rospy.is_shutdown()):
 			control.cruizer()
-			# control.convertor()
-			#control.errorcheck()
-			#time.sleep(0.05)
+			
 	except KeyboardInterrupt():
 		print("Shutting down..")
+		self.BrakeAngle = 1
+		self.BrakeMotorSpeed = 1
+		self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
+		self.BrakePub.publish(self.Brake)
+		time.sleep(0.05)
+		self.NormalAccel = 1
+		self.AccelMotorSpeed = 1
+		self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
+		self.AccelPub.publish(self.Accel)
+		time.sleep(0.05)
+		self.ClutchAngle = 1
+		self.ClutchMotorSpeed = 1
+		self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
+		self.ClutchPub.publish(self.Clutch)
+		time.sleep(0.05)
 		rospy.shutdown()
 
 	rospy.shutdown()
