@@ -7,12 +7,12 @@ We will see
 import rospy
 from std_msgs.msg import Int64, Float64MultiArray, Float64, Float32MultiArray, Bool
 
-from PID_class import *
 from simple_pid import PID
 
 # from camera_radar_msg.msg import fused_data
 # from camera_radar_msg.msg import fused_data_
-import sys, time
+import sys
+import time
 
 class Controls(object):
 
@@ -28,31 +28,42 @@ class Controls(object):
 		self.RadianFactor = 57.3248
 		self.MotorToBodyFactor = 36
 		
+		#Objects for PID class
+		# self.LK2 = PID(self.Accel2Fact, self.Accel2Param, self.Accel2Constrain)
+		# self.steer = PID(self.SteerFact,self.SteerParam, self.SteerConstrain)
+		# self.Brake1 = PID(self.Brake1Fact, self.Brake1Param, self.Brake1Constrain)
+		
 		#Motor Speed 
 		self.AccelMotorSpeed  = 1
 		self.BrakeMotorSpeed = 2
 		self.SteerMotorSpeed = 1
+		self.ClutchMotorSpeed = 1
 		
 		#Speed related 
 		self.ObjectPresent = False
 		self.ReferenceSpeed = 0
 		self.BrakeAngle = 0.0
+		self.ClutchAngle = 0.0
 		self.CurrentVelocity = 0.0
 		self.EmergencyBrakeMotorSpeed = 0.05
 		self.EmergencyBrakeAngle = 129
 		# self.STOPBoardDistance = 15.0
 
 		#Limiting Variables
-		self.AccelMax = 100
-		self.BrakeMax = 100
+		self.AccelMax = 50
+		self.BrakeMax = 100		#100 
+		self.ClutchMax = 350
+		self.halfClutch = 210 	#210-200
 
-		self.AccelAngle = 1
+		self.NormalAccel = 1
 		self.ThrottlePos = 1
 		
-		self.Brake = Float64MultiArray()
-		self.Accel = Float64MultiArray()
-		self.Steer = Float64MultiArray()
-		self.BrakeEmergency = Float64MultiArray()
+		self.Brake = Float32MultiArray()
+		self.Accel = Float32MultiArray()
+		self.Steer = Float32MultiArray()
+		self.Clutch = Float32MultiArray()
+		
+		self.BrakeEmergency = Float32MultiArray()
 
 		self.FBSteeringAngle = 0
 		self.CurrentSteeringAngle = 0
@@ -63,26 +74,30 @@ class Controls(object):
 		self.i = 0
 
 		#Accel PID Parameters
-		self.AccelKp = 13.0
-		self.AccelKi = 0.1
-		self.AccelKd = 1.5
+		self.AccelKp = 6.5
+		self.AccelKi = 0.0
+		self.AccelKd = 0.0
 		self.Accelsetpoint = self.ReferenceSpeed
+
 		self.AccelPID = PID(Kp = self.AccelKp, Ki = self.AccelKi, Kd = self.AccelKd, setpoint = self.Accelsetpoint)
 		self.AccelPID.output_limits = (0, 50)
 
 		#Brake PID Parameters
-		self.BrakeKp = -19.5 
-		self.BrakeKi = -0.6
-		self.BrakeKd = -5.0
+		self.BrakeKp = -5.0 
+		self.BrakeKi = -0.0
+		self.BrakeKd = -0.0
 		self.Brakesetpoint = self.ReferenceSpeed
+
 		self.BrakePID = PID(Kp = self.BrakeKp, Ki = self.BrakeKi, Kd = self.BrakeKd, setpoint = self.Brakesetpoint)
 		self.BrakePID.output_limits = (0, self.BrakeMax)
+		# self.BrakePID.proportional_on_measurement = True
+
 
 		if not rospy.is_shutdown():
 			#Subscribers
 			# self.OffsetValue = rospy.Subscriber("Vision/Lane_Offset", Int64, self.cal_angle)
-			rospy.Subscriber("Input/Inputs", Float32MultiArray, self.get_data , queue_size=1)
-			rospy.Subscriber("Output/Feedback", Float32MultiArray, self.get_FBdata , queue_size=1)
+			rospy.Subscriber("Input/Inputs", Float64MultiArray, self.get_data , queue_size=1)
+			# rospy.Subscriber("Output/Feedback", Float32MultiArray, self.get_FBdata , queue_size=1)
 			# rospy.Subscriber("/fused_data", fused_data_, self.update_dist)
 			rospy.Subscriber("/manual_speed", Float64, self.call_manualSPeed)
 			# rospy.Subscriber("/object_dis", Float64, self.get_obj_dis)
@@ -93,9 +108,10 @@ class Controls(object):
 			#rospy.Subscriber("/Controls/debug", , self.get_emergency, queue_size=1)
 
 			#Publisher
-			self.SteerPub = rospy.Publisher('/Output/Steering_Angle', Float64MultiArray, queue_size=1)   # For steering motor
-			self.BrakePub = rospy.Publisher('/Output/Brake_Angle', Float64MultiArray, queue_size=1)       # For brake motor
-			self.AccelPub = rospy.Publisher('/Output/Speed_Angle', Float64MultiArray, queue_size=1)   # For accelerator motor
+			self.SteerPub = rospy.Publisher('/Output/Steering_Angle', Float32MultiArray, queue_size=1)   # For steering motor
+			self.BrakePub = rospy.Publisher('/Output/Brake_Angle', Float32MultiArray, queue_size=1)       # For brake motor
+			self.ClutchPub = rospy.Publisher('/Output/Clutch_Angle', Float32MultiArray, queue_size=1)       # For brake motor			
+			self.AccelPub = rospy.Publisher('/Output/Speed_Angle', Float32MultiArray, queue_size=1)   # For accelerator motor
 			self.SpeedPub = rospy.Publisher('/OBD', Float64, queue_size=1)   # For accelerator motor
 
 
@@ -132,7 +148,7 @@ class Controls(object):
 			self.ReferenceSpeed = 0
 
 	def get_data(self, data):
-		self.CurrentVelocity = data.data[12]
+		self.CurrentVelocity = data.data[5]
 		self.ThrottlePos = data.data[11]
 		self.BrakePot = data.data[4]
 		self.OBD = Float64()
@@ -182,16 +198,19 @@ class Controls(object):
 													accelerate & Release brake    do nothing     brake & deaccelrate
 															PID
 		'''
-		print(self.ObjectPresent,self.CurrentVelocity,self.ReferenceSpeed,self.AccelAngle,self.AccelMotorSpeed,self.BrakeAngle,self.BrakeMotorSpeed)
+		print(self.ObjectPresent,self.CurrentVelocity,self.ReferenceSpeed,self.NormalAccel,self.BrakeAngle,self.ClutchAngle)
 		if(self.ObjectPresent):
-			print("Object Detected")
+			print("Going to Emergency ")
+			# self.NormalAccel = 1
+			# self.Accel.data = [1, 1]
+			# self.AccelPub.publish(self.Accel)
+			# print("Object Detected")
 			self.EmergencyBraking()
 			
 		else:
 			if(self.ReferenceSpeed >= 100):
 				
 				self.AccelPID.auto_mode = False
-				self.BrakePID.auto_mode = False
 
 				self.BrakeAngle = 1
 				self.BrakeMotorSpeed = 1
@@ -199,10 +218,16 @@ class Controls(object):
 				self.BrakePub.publish(self.Brake)
 				time.sleep(0.05)
 				
-				self.AccelAngle = 1
+				self.NormalAccel = 1
 				self.AccelMotorSpeed = 1
-				self.Accel.data = [self.AccelAngle, self.AccelMotorSpeed]
+				self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
 				self.AccelPub.publish(self.Accel)
+				time.sleep(0.05)
+
+				self.ClutchAngle = 1
+				self.ClutchMotorSpeed = 1
+				self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
+				self.ClutchPub.publish(self.Clutch)
 				time.sleep(0.05)
 				return 0
 	
@@ -212,38 +237,71 @@ class Controls(object):
 				self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
 				self.BrakePub.publish(self.Brake)
 				time.sleep(0.05)
-				self.AccelAngle = 1
+				self.NormalAccel = 1
 				self.AccelMotorSpeed = 1
-				self.Accel.data = [self.AccelAngle, self.AccelMotorSpeed]
+				self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
 				self.AccelPub.publish(self.Accel)
 				time.sleep(0.05)
-
+				self.ClutchAngle = self.ClutchMax
+				self.ClutchMotorSpeed = 1
+				self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
+				self.ClutchPub.publish(self.Clutch)
+				time.sleep(0.05)
+				
 			else:
 				self.AccelPID.setpoint = self.ReferenceSpeed
-				self.BrakePID.setpoint = self.ReferenceSpeed			
+				self.BrakePID.setpoint = self.ReferenceSpeed
+			
 
+				#Condition 1 : When Current velocity is smaller than Reference Speed
+				# if (self.CurrentVelocity < self.ReferenceSpeed):
 				if(1):
-					print("PID working")
+					if(self.CurrentVelocity<8):
+						self.AccelPID.output_limits = (0, 30)
+						self.BrakePID.output_limits = (0, self.BrakeMax)		
+						if(self.CurrentVelocity<5):
+							self.ClutchAngle = self.halfClutch
+						else:
+							self.ClutchAngle = 195
+						self.ClutchMotorSpeed = 1
+						self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
+						self.ClutchPub.publish(self.Clutch)
+				
+					else:
+						self.AccelPID.output_limits = (0, 40)
+						self.ClutchAngle = 1
+						self.ClutchMotorSpeed = 1
+						self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
+						self.ClutchPub.publish(self.Clutch)
+
+					print("Accelerating")
 					
 					self.AccelPID.auto_mode = True
 					self.BrakePID.auto_mode = True
 
-					self.AccelAngle = 50 + self.AccelPID(self.CurrentVelocity)					
-					if(self.AccelAngle > self.AccelMax):
-						self.AccelAngle = self.AccelMax
+					self.NormalAccel = 14 + self.AccelPID(self.CurrentVelocity)					
+					if(self.NormalAccel > self.AccelMax):
+						self.NormalAccel = self.AccelMax
 					self.AccelMotorSpeed = 1					
-					self.Accel.data = [self.AccelAngle, self.AccelMotorSpeed]
+					# print("Normal Acceleration : ", self.NormalAccel)
+					self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
 					self.AccelPub.publish(self.Accel)
 					time.sleep(0.05)
 
-					self.BrakeAngle = 0 + self.BrakePID(self.CurrentVelocity)					
+					self.BrakeAngle = 10 + self.BrakePID(self.CurrentVelocity)					
 					if(self.BrakeAngle > self.BrakeMax):
 						self.BrakeAngle = self.BrakeMax
 					self.BrakeMotorSpeed = 1					
+					# print("Normal Acceleration : ", self.NormalAccel)
 					self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
 					self.BrakePub.publish(self.Brake)
-					time.sleep(0.05)
-		
+					time.sleep(0.05)					
+			
+			# else:
+			# 	self.Brake.data = [1, 1]
+			# 	self.BrakePub.publish(self.Brake)
+			# 	time.sleep(0.05)
+				
 
 def main(args):
 	try:
@@ -253,17 +311,11 @@ def main(args):
 			# control.convertor()
 			#control.errorcheck()
 			#time.sleep(0.05)
-	except KeyboardInterrupt:
-		self.Brake.data = [1, 1]
-		self.BrakePub.publish(self.Brake)
-		time.sleep(0.05)
-		self.Accel.data = [1, 1]
-		self.AccelPub.publish(self.Accel)
-		time.sleep(0.05)
-
+	except KeyboardInterrupt():
 		print("Shutting down..")
 		rospy.shutdown()
-		sys.exit()
+
+	rospy.shutdown()
 
 if __name__ == '__main__':
 	main(sys.argv)
