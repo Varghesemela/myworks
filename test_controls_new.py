@@ -5,6 +5,7 @@ We will see
 '''
 
 import rospy
+import array
 from std_msgs.msg import Int64, Float64MultiArray, Float64, Float32MultiArray, Bool
 
 from simple_pid import PID
@@ -42,6 +43,12 @@ class Controls(object):
 		#Speed related 
 		self.ObjectPresent = False
 		self.ReferenceSpeed = 0
+		self.CurrentSum = 0
+		self.index = 0
+		self.CurrentReadings = [0,0,0,0,0,0,0,0,0,0,0]
+		self.CurrentValue = 0
+
+
 		self.BrakeAngle = 0.0
 		self.ClutchAngle = 0.0
 		self.CurrentVelocity = 0.0
@@ -50,9 +57,9 @@ class Controls(object):
 		# self.STOPBoardDistance = 15.0
 
 		#Limiting Variables
-		self.AccelMax = 50
-		self.BrakeMax = 100		#100 
-		self.ClutchMax = 350
+		self.AccelMax = 70
+		self.BrakeMax = 135		#100 
+		self.ClutchMax = 330
 		self.halfClutch = 210 	#210-200
 
 		self.NormalAccel = 1
@@ -74,18 +81,18 @@ class Controls(object):
 		self.i = 0
 
 		#Accel PID Parameters
-		self.AccelKp = 6.5
-		self.AccelKi = 0.0
-		self.AccelKd = 0.0
+		self.AccelKp = 6.0
+		self.AccelKi = 1.2
+		self.AccelKd = 1.5
 		self.Accelsetpoint = self.ReferenceSpeed
 
 		self.AccelPID = PID(Kp = self.AccelKp, Ki = self.AccelKi, Kd = self.AccelKd, setpoint = self.Accelsetpoint)
 		self.AccelPID.output_limits = (0, 50)
 
 		#Brake PID Parameters
-		self.BrakeKp = -5.0 
+		self.BrakeKp = -8.0 
 		self.BrakeKi = -0.0
-		self.BrakeKd = -0.0
+		self.BrakeKd = -5.0
 		self.Brakesetpoint = self.ReferenceSpeed
 
 		self.BrakePID = PID(Kp = self.BrakeKp, Ki = self.BrakeKi, Kd = self.BrakeKd, setpoint = self.Brakesetpoint)
@@ -133,7 +140,14 @@ class Controls(object):
 			self.ReferenceSpeed = 0
 
 	def get_data(self, data):
-		self.CurrentVelocity = data.data[5]
+		# self.CurrentVelocity = data.data[5]
+		self.CurrentSum = self.CurrentSum - self.CurrentReadings[self.index]
+		self.CurrentValue = data.data[5]
+		self.CurrentReadings[self.index] = self.CurrentValue
+		self.CurrentSum = self.CurrentSum + self.CurrentValue
+		self.index = (self.index+1)%10
+		self.CurrentVelocity = (self.CurrentSum/10)/2
+
 		self.ThrottlePos = data.data[11]
 		self.BrakePot = data.data[4]
 		self.OBD = Float64()
@@ -153,14 +167,13 @@ class Controls(object):
 
 	def cruizer(self):
 
-		print(self.ObjectPresent,self.CurrentVelocity,self.ReferenceSpeed,self.NormalAccel,self.BrakeAngle,self.ClutchAngle)
+		print(self.ObjectPresent,self.CurrentVelocity,self.ReferenceSpeed,self.NormalAccel,int(self.BrakeAngle),self.ClutchAngle)
 		if(self.ObjectPresent):
 			print("Going to Emergency ")
 			self.EmergencyBraking()
 			
 		else:
-			if(self.ReferenceSpeed >= 100):
-				
+			if(self.ReferenceSpeed >= 100):	
 				self.BrakeAngle = 1
 				self.BrakeMotorSpeed = 1
 				self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
@@ -196,11 +209,14 @@ class Controls(object):
 				time.sleep(0.05)
 				
 			else:
+				self.BrakePID.auto_mode = True
+				self.AccelPID.auto_mode = True
+					
 				self.AccelPID.setpoint = self.ReferenceSpeed
 				self.BrakePID.setpoint = self.ReferenceSpeed
 			
 				if(1):
-					if(self.CurrentVelocity < 6):
+					if(self.CurrentVelocity < 8):
 						self.AccelPID.output_limits = (0, 30)
 						self.BrakePID.output_limits = (0, self.BrakeMax)		
 						self.ClutchAngle = self.halfClutch
@@ -209,74 +225,41 @@ class Controls(object):
 						self.ClutchPub.publish(self.Clutch)
 				
 					else:
-						self.AccelPID.output_limits = (0, 40)
-						self.ClutchAngle = 1
+						self.AccelPID.output_limits = (0, 60)
+						self.ClutchAngle = 130
 						self.ClutchMotorSpeed = 1
 						self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
 						self.ClutchPub.publish(self.Clutch)
 					print("Accelerating", self.NormalAccel)
 					
-					self.AccelPID.auto_mode = True
-					self.NormalAccel = 15 + self.AccelPID(self.CurrentVelocity)					
-					if(self.NormalAccel > self.AccelMax):
-						self.NormalAccel = self.AccelMax
-					self.AccelMotorSpeed = 1					
-					self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
-					self.AccelPub.publish(self.Accel)
-					time.sleep(0.05)
+					# self.NormalAccel = 17 + self.AccelPID(self.CurrentVelocity)					
+					# if(self.NormalAccel > self.AccelMax):
+					# 	self.NormalAccel = self.AccelMax
+					# self.AccelMotorSpeed = 1					
+					# self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
+					# self.AccelPub.publish(self.Accel)
+					# time.sleep(0.05)
 					
-					self.BrakePID.auto_mode = True
-					self.BrakeAngle = 50 + self.BrakePID(self.CurrentVelocity)					
+					
+					self.BrakeAngle = 100 + self.BrakePID(self.CurrentVelocity)					
 					if(self.BrakeAngle > self.BrakeMax):
 						self.BrakeAngle = self.BrakeMax
 					self.BrakeMotorSpeed = 1					
-					self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
+					self.Brake.data = [int(self.BrakeAngle), self.BrakeMotorSpeed]
 					self.BrakePub.publish(self.Brake)
 					time.sleep(0.05)									
 
 def main(args):
 	try:
 		control = Controls()
-		self.BrakeMotorSpeed = 1					
-		self.Brake.data = [self.BrakeMax, self.BrakeMotorSpeed]
-		self.BrakePub.publish(self.Brake)
-		time.sleep(1)
-
-		self.ClutchMotorSpeed = 1					
-		self.Clutch.data = [self.ClutchMax, self.ClutchMotorSpeed]
-		self.BrakePub.publish(self.Clutch)
-		time.sleep(1)
-
-
-		self.BrakeAngle = 1
-		self.BrakeMotorSpeed = 1					
-		self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
-		self.BrakePub.publish(self.Brake)
-		time.sleep(1)
-
+		# rate = rospy.Rate(10)
 		while (not rospy.is_shutdown()):
+			# rate.sleep()
 			control.cruizer()
 			
 	except KeyboardInterrupt():
 		print("Shutting down..")
-		self.BrakeAngle = 1
-		self.BrakeMotorSpeed = 1
-		self.Brake.data = [self.BrakeAngle, self.BrakeMotorSpeed]
-		self.BrakePub.publish(self.Brake)
-		time.sleep(0.05)
-		self.NormalAccel = 1
-		self.AccelMotorSpeed = 1
-		self.Accel.data = [self.NormalAccel, self.AccelMotorSpeed]
-		self.AccelPub.publish(self.Accel)
-		time.sleep(0.05)
-		self.ClutchAngle = 1
-		self.ClutchMotorSpeed = 1
-		self.Clutch.data = [self.ClutchAngle, self.ClutchMotorSpeed]
-		self.ClutchPub.publish(self.Clutch)
-		time.sleep(0.05)
 		rospy.shutdown()
-
-	rospy.shutdown()
 
 if __name__ == '__main__':
 	main(sys.argv)
